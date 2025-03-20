@@ -1,56 +1,51 @@
-// KHAN-MD-V1
+//KHAN-MD-V1
 
 const FormData = require("form-data");
-
-async function remini(imageBuffer, effect) {
-  return new Promise(async (resolve, reject) => {
-    let validEffects = ['enhance', "recolor", "dehaze"];
-    if (validEffects.includes(effect)) {
-      effect = effect;
+async function remini(_0x33b965, _0x34eff3) {
+  return new Promise(async (_0x14db15, _0x267c15) => {
+    let _0x45d85b = ['enhance', "recolor", "dehaze"];
+    if (_0x45d85b.includes(_0x34eff3)) {
+      _0x34eff3 = _0x34eff3;
     } else {
-      effect = validEffects[0]; // Default to 'enhance'
+      _0x34eff3 = _0x45d85b[0x0];
     }
-
-    let formData = new FormData();
-    let apiUrl = "https://inferenceengine.vyro.ai/" + effect;
-
-    formData.append("model_version", 1, {
+    let _0x370778 = new FormData();
+    let _0x5c019f = "https://inferenceengine.vyro.ai/" + _0x34eff3;
+    _0x370778.append("model_version", 0x1, {
       'Content-Transfer-Encoding': "binary",
-      'contentType': "multipart/form-data; charset=utf-8"
+      'contentType': "multipart/form-data; charset=uttf-8"
     });
-
-    formData.append('image', Buffer.from(imageBuffer), {
+    _0x370778.append('image', Buffer.from(_0x33b965), {
       'filename': "enhance_image_body.jpg",
       'contentType': "image/jpeg"
     });
-
-    formData.submit({
-      'url': apiUrl,
+    _0x370778.submit({
+      'url': _0x5c019f,
       'host': "inferenceengine.vyro.ai",
-      'path': '/' + effect,
+      'path': '/' + _0x34eff3,
       'protocol': "https:",
       'headers': {
         'User-Agent': 'okhttp/4.9.3',
         'Connection': "Keep-Alive",
         'Accept-Encoding': "gzip"
       }
-    }, function (error, response) {
-      if (error) {
-        reject();
+    }, function (_0x319120, _0x175e8d) {
+      if (_0x319120) {
+        _0x267c15();
       }
-
-      let chunks = [];
-      response.on('data', function (chunk) {
-        chunks.push(chunk);
+      let _0x15e24d = [];
+      _0x175e8d.on('data', function (_0x2918a5, _0x2d4e53) {
+        _0x15e24d.push(_0x2918a5);
       }).on("end", () => {
-        resolve(Buffer.concat(chunks));
+        _0x14db15(Buffer.concat(_0x15e24d));
       });
-
-      response.on("error", () => {
-        reject();
+      _0x175e8d.on("error", _0x90e19c => {
+        _0x267c15();
       });
     });
   });
 }
-
 module.exports.remini = remini;
+
+
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            
