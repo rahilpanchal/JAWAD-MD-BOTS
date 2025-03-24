@@ -35,4 +35,3 @@ const alive = async (m, Matrix) => {
 };
 
 export default alive;
-    
