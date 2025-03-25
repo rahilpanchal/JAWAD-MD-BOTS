@@ -1,56 +1,105 @@
-import axios from "axios";
-import yts from "yt-search";
+import { writeFile } from 'fs/promises';
 import config from '../config.cjs';
+import yts from 'yt-search';
+import axios from 'axios';
 
-const play = async (m, gss) => {
+const playCommand = async (m, sock) => {
   const prefix = config.PREFIX;
-  const cmd = m.body.startsWith(prefix) ? m.body.slice(prefix.length).split(" ")[0].toLowerCase() : "";
-  const args = m.body.slice(prefix.length + cmd.length).trim().split(" ");
+  const cmd = m.body.startsWith(prefix) ? m.body.slice(prefix.length).split(' ')[0].toLowerCase() : '';
+  const args = m.body.slice(prefix.length + cmd.length).trim();
 
-  if (cmd === "play") {
-    if (args.length === 0 || !args.join(" ")) {
-      return m.reply("*Please provide a song name or keywords to search for.*");
-    }
+  const validCommands = ['play', 'mp3', 'ytmp3', 'play2'];
 
-    const searchQuery = args.join(" ");
-    m.reply("*🎧 Searching for the song...*");
-
+  if (validCommands.includes(cmd)) {
     try {
-      const searchResults = await yts(searchQuery);
-      if (!searchResults.videos || searchResults.videos.length === 0) {
-        return m.reply(`❌ No results found for "${searchQuery}".`);
+      if (!args.length) {
+        await sock.sendMessage(m.from, { 
+          text: 'Please provide a song name. Example: .play Moye Moye' 
+        }, { quoted: m });
+        return;
       }
 
-      const firstResult = searchResults.videos[0];
-      const videoUrl = firstResult.url;
+      // Add processing reaction
+      await sock.sendMessage(m.from, { 
+        react: { 
+          text: '⚡', 
+          key: m.key 
+        } 
+      });
 
-      // Call the API to download the audio
-      const apiUrl = `https://api.davidcyriltech.my.id/download/ytmp3?url=${videoUrl}`;
-      const response = await axios.get(apiUrl);
-
-      if (!response.data.success) {
-        return m.reply(`❌ Failed to fetch audio for "${searchQuery}".`);
+      // Search for the song on YouTube
+      const query = args.join(" ");
+      const searchResults = await yts(query);
+      
+      if (!searchResults.videos.length) {
+        await sock.sendMessage(m.from, { 
+          react: { 
+            text: '❌', 
+            key: m.key 
+          } 
+        });
+        await sock.sendMessage(m.from, { 
+          text: '❌ No results found.' 
+        }, { quoted: m });
+        return;
       }
 
-      const { title, download_url } = response.data.result;
+      const videoUrl = searchResults.videos[0].url;
+      let mp3Url;
 
-      // Send the audio file
-      await gss.sendMessage(
-        m.from,
-        {
-          audio: { url: download_url },
-          mimetype: "audio/mp4",
-          ptt: false,
-        },
-        { quoted: m }
-      );
+      // Use different API endpoints for play and play2 commands
+      if (cmd === 'play2') {
+        const apiUrl = `https://apis.davidcyriltech.my.id/youtube/mp3?url=${videoUrl}`;
+        const response = await axios.get(apiUrl);
+        if (!response.data.success || !response.data.result.downloadUrl) {
+          throw new Error('Failed to fetch MP3 from play2 API');
+        }
+        mp3Url = response.data.result.downloadUrl;
+      } else {
+        const apiUrl = `https://apis.davidcyriltech.my.id/download/ytmp3?url=${videoUrl}`;
+        const response = await axios.get(apiUrl);
+        if (!response.data.success || !response.data.result.download_url) {
+          throw new Error('Failed to fetch MP3 from play API');
+        }
+        mp3Url = response.data.result.download_url;
+      }
 
-      m.reply(`✅ *${title}* has been downloaded successfully!`);
+      // Send the MP3 as an audio file
+      await sock.sendMessage(m.from, {
+        audio: { url: mp3Url },
+        mimetype: 'audio/mpeg',
+        ptt: false
+      }, { quoted: m });
+
+      // Add success reaction
+      await sock.sendMessage(m.from, { 
+        react: { 
+          text: '✅', 
+          key: m.key 
+        } 
+      });
+
     } catch (error) {
-      console.error(error);
-      m.reply("❌ An error occurred while processing your request.");
+      console.error("Error in play command:", error);
+      
+      // Add failure reaction
+      await sock.sendMessage(m.from, { 
+        react: { 
+          text: '❌', 
+          key: m.key 
+        } 
+      });
+
+      // Send error message
+      const errorMessage = `*❌ Error in ${cmd} command*\n\n` +
+        `*Error:* ${error.message}\n` +
+        `*Timestamp:* ${new Date().toLocaleString()}`;
+      
+      await sock.sendMessage(m.from, { 
+        text: errorMessage 
+      }, { quoted: m });
     }
   }
 };
 
-export default play;
+export default playCommand;
