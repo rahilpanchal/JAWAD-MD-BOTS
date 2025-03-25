@@ -5,36 +5,49 @@ import config from '../config.cjs';
 const song = async (m, gss) => {
   const prefix = config.PREFIX;
   const cmd = m.body.startsWith(prefix) ? m.body.slice(prefix.length).split(" ")[0].toLowerCase() : "";
-  const args = m.body.slice(prefix.length + cmd.length).trim();
+  const args = m.body.slice(prefix.length + cmd.length).trim().split(" ");
 
-  const validCommands = ['song', 'video'];
-  if (validCommands.includes(cmd)) {
-    if (!args) return m.reply("Please provide a song name\nExample: .song Moye Moye");
+  if (cmd === "song") {
+    if (args.length === 0 || !args.join(" ")) {
+      return m.reply("*Please provide a song name or keywords to search for.*");
+    }
+
+    const searchQuery = args.join(" ");
+    m.reply("*🎥 Searching for the video...*");
 
     try {
-      m.reply("🔍 Searching for your song...");
-      const searchResults = await yts(args);
-      if (!searchResults.videos.length) return m.reply("❌ No results found");
+      const searchResults = await yts(searchQuery);
+      if (!searchResults.videos || searchResults.videos.length === 0) {
+        return m.reply(`❌ No results found for "${searchQuery}".`);
+      }
 
-      const video = searchResults.videos[0];
-      const apiUrl = `https://api.davidcyriltech.my.id/download/ytmp4?url=${video.url}`;
-      const { data } = await axios.get(apiUrl);
+      const firstResult = searchResults.videos[0];
+      const videoUrl = firstResult.url;
 
-      if (!data.success) return m.reply("❌ Failed to download video");
+      // Fetch video using API
+      const apiUrl = `https://apis.davidcyriltech.my.id/download/ytmp4?url=${videoUrl}`;
+      const response = await axios.get(apiUrl);
 
+      if (!response.data.success) {
+        return m.reply(`❌ Failed to fetch video for "${searchQuery}".`);
+      }
+
+      const { title, download_url } = response.data.result;
+
+      // Send the video file
       await gss.sendMessage(
         m.from,
-        { 
-          video: { url: data.result.download_url },
-          caption: `*${data.result.title}*\n\n*Powered By JawadTechX 💜*`,
-          thumbnail: data.result.thumbnail
+        {
+          video: { url: download_url },
+          mimetype: "video/mp4",
+          caption: `*${title}*\n\nPowered By JawadTechX 💜`,
         },
         { quoted: m }
       );
 
     } catch (error) {
       console.error(error);
-      m.reply("❌ An error occurred");
+      m.reply("❌ An error occurred while processing your request.");
     }
   }
 };
