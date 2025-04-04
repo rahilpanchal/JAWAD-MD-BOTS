@@ -44,7 +44,7 @@ const antiDelete = new AntiDeleteSystem();
 const AntiDelete = async (m, Matrix) => {
     antiDelete.botNumber = Matrix.user.id.split(':')[0]?.split('@')[0] + '@s.whatsapp.net';
     const prefix = config.PREFIX;
-    const ownerJid = config.OWNER_NUMBER + '@s.whatsapp.net';
+    const ownerJid = sock.user.id.split(':')[0] + '@s.whatsapp.net';
     const text = m.body?.slice(prefix.length).trim().split(' ') || [];
     const cmd = text[0]?.toLowerCase();
     const subCmd = text[1]?.toLowerCase();
