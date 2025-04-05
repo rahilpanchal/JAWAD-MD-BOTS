@@ -12,7 +12,7 @@ class AntiDeleteSystem {
         this.enabled = config.ANTI_DELETE || false;
         this.cacheExpiry = 5 * 60 * 1000; // 5 minutes
         this.messageCache = new Map();
-        this.recoveredMessages = new Set();
+        this.processedDeletions = new Set(); // Track processed deletions
         this.loadDatabase();
         this.cleanupInterval = setInterval(() => this.cleanExpiredMessages(), this.cacheExpiry);
     }
@@ -21,9 +21,9 @@ class AntiDeleteSystem {
     loadDatabase() {
         try {
             if (fs.existsSync(DB_FILE)) {
-                const { cache, recovered } = JSON.parse(fs.readFileSync(DB_FILE, 'utf8'));
+                const { cache, processed } = JSON.parse(fs.readFileSync(DB_FILE, 'utf8'));
                 this.messageCache = new Map(cache || []);
-                this.recoveredMessages = new Set(recovered || []);
+                this.processedDeletions = new Set(processed || []);
             }
         } catch (error) {
             console.error('🚨 Database load error:', error.message);
@@ -34,7 +34,7 @@ class AntiDeleteSystem {
         try {
             fs.writeFileSync(DB_FILE, JSON.stringify({
                 cache: [...this.messageCache],
-                recovered: [...this.recoveredMessages]
+                processed: [...this.processedDeletions]
             }), 'utf8');
         } catch (error) {
             console.error('🚨 Database save error:', error.message);
@@ -62,7 +62,7 @@ class AntiDeleteSystem {
         for (const [key, msg] of this.messageCache.entries()) {
             if (now - msg.timestamp > this.cacheExpiry) {
                 this.messageCache.delete(key);
-                this.recoveredMessages.delete(key);
+                this.processedDeletions.delete(key);
             }
         }
         this.saveDatabase();
@@ -106,7 +106,7 @@ const AntiDelete = async (m, Matrix) => {
         else if (text === 'off') {
             antiDelete.enabled = false;
             antiDelete.messageCache.clear();
-            antiDelete.recoveredMessages.clear();
+            antiDelete.processedDeletions.clear();
             await m.reply(`━━〔 *ANTI-DELETE* 〕━━┈⊷\n┃◈╭─────────────·๏\n┃◈┃• *Status:* 🔴 DISABLED\n┃◈╰─────────────·๏`);
         }
         else {
@@ -164,7 +164,7 @@ const AntiDelete = async (m, Matrix) => {
         }
     });
 
-    /* Deletion Handler */
+    /* Deletion Handler with Anti-Spam */
     Matrix.ev.on('messages.update', async updates => {
         if (!antiDelete.enabled || !updates?.length) return;
 
@@ -172,17 +172,17 @@ const AntiDelete = async (m, Matrix) => {
             try {
                 const { key, update: updateData } = update;
                 
-                // Skip if not a deletion or already processed
+                // Skip if not a deletion event, not in cache, or already processed
                 if (updateData?.messageStubType !== proto.WebMessageInfo.StubType.REVOKE || 
                     !antiDelete.messageCache.has(key.id) ||
-                    antiDelete.recoveredMessages.has(key.id)) {
+                    antiDelete.processedDeletions.has(key.id)) {
                     continue;
                 }
 
                 const msg = antiDelete.messageCache.get(key.id);
                 const destination = config.ANTI_DELETE_PATH === "same" ? key.remoteJid : Matrix.user.id;
 
-                // Prepare alert
+                // Prepare alert (only once)
                 const alertMsg = [
                     `━━〔 *ANTI-DELETE ALERT ⚠️* 〕━━┈⊷`,
                     `┃◈╭─────────────·๏`,
@@ -192,7 +192,7 @@ const AntiDelete = async (m, Matrix) => {
                     `┃◈╰─────────────·๏`
                 ].join('\n');
 
-                // Send recovery
+                // Send recovery (only once)
                 if (msg.media) {
                     await Matrix.sendMessage(destination, {
                         [msg.type]: msg.media,
@@ -209,8 +209,8 @@ const AntiDelete = async (m, Matrix) => {
                     });
                 }
 
-                // Update state
-                antiDelete.recoveredMessages.add(key.id);
+                // Mark as processed immediately
+                antiDelete.processedDeletions.add(key.id);
                 antiDelete.messageCache.delete(key.id);
                 antiDelete.saveDatabase();
 
