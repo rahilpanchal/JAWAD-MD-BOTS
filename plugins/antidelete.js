@@ -12,7 +12,7 @@ class AntiDeleteSystem {
         this.enabled = config.ANTI_DELETE || false;
         this.cacheExpiry = 5 * 60 * 1000; // 5 minutes
         this.messageCache = new Map();
-        this.recoveredMessages = new Set();
+        this.lastProcessed = new Map(); // Track last processed deletions
         this.loadDatabase();
         this.cleanupInterval = setInterval(() => this.cleanExpiredMessages(), this.cacheExpiry);
     }
@@ -21,9 +21,9 @@ class AntiDeleteSystem {
     loadDatabase() {
         try {
             if (fs.existsSync(DB_FILE)) {
-                const { cache, recovered } = JSON.parse(fs.readFileSync(DB_FILE, 'utf8'));
+                const { cache, lastProcessed } = JSON.parse(fs.readFileSync(DB_FILE, 'utf8'));
                 this.messageCache = new Map(cache || []);
-                this.recoveredMessages = new Set(recovered || []);
+                this.lastProcessed = new Map(lastProcessed || []);
             }
         } catch (error) {
             console.error('🚨 Database load error:', error.message);
@@ -34,35 +34,37 @@ class AntiDeleteSystem {
         try {
             fs.writeFileSync(DB_FILE, JSON.stringify({
                 cache: [...this.messageCache],
-                recovered: [...this.recoveredMessages]
+                lastProcessed: [...this.lastProcessed]
             }), 'utf8');
         } catch (error) {
             console.error('🚨 Database save error:', error.message);
         }
     }
 
-    /* Media Download with Retry */
-    async downloadMediaWithRetry(mediaMsg, type, retries = 3) {
-        for (let i = 0; i < retries; i++) {
-            try {
-                const stream = await downloadContentFromMessage(mediaMsg, type);
-                let buffer = Buffer.from([]);
-                for await (const chunk of stream) buffer = Buffer.concat([buffer, chunk]);
-                return buffer;
-            } catch (error) {
-                if (i === retries - 1) throw error;
-                await new Promise(resolve => setTimeout(resolve, 2000 * (i + 1)));
-            }
-        }
+    /* Message Handling */
+    addMessage(key, message) {
+        this.messageCache.set(key, message);
+        this.saveDatabase();
     }
 
-    /* Cleanup */
+    markAsProcessed(key) {
+        this.lastProcessed.set(key, Date.now());
+        this.saveDatabase();
+    }
+
     cleanExpiredMessages() {
         const now = Date.now();
+        // Clean old messages
         for (const [key, msg] of this.messageCache.entries()) {
             if (now - msg.timestamp > this.cacheExpiry) {
                 this.messageCache.delete(key);
-                this.recoveredMessages.delete(key);
+                this.lastProcessed.delete(key);
+            }
+        }
+        // Clean old processed entries
+        for (const [key, timestamp] of this.lastProcessed.entries()) {
+            if (now - timestamp > this.cacheExpiry) {
+                this.lastProcessed.delete(key);
             }
         }
         this.saveDatabase();
@@ -75,6 +77,9 @@ class AntiDeleteSystem {
 }
 
 const antiDelete = new AntiDeleteSystem();
+
+// Global variable to track active processing
+const activeProcessing = new Set();
 
 const AntiDelete = async (m, Matrix) => {
     // Authorization
@@ -106,7 +111,7 @@ const AntiDelete = async (m, Matrix) => {
         else if (text === 'off') {
             antiDelete.enabled = false;
             antiDelete.messageCache.clear();
-            antiDelete.recoveredMessages.clear();
+            antiDelete.lastProcessed.clear();
             await m.reply(`━━〔 *ANTI-DELETE* 〕━━┈⊷\n┃◈╭─────────────·๏\n┃◈┃• *Status:* 🔴 DISABLED\n┃◈╰─────────────·๏`);
         }
         else {
@@ -134,10 +139,10 @@ const AntiDelete = async (m, Matrix) => {
                 for (const type of ['image', 'video', 'audio', 'document', 'sticker']) {
                     if (msg.message[`${type}Message`]) {
                         try {
-                            media = await antiDelete.downloadMediaWithRetry(
-                                msg.message[`${type}Message`],
-                                type
-                            );
+                            const stream = await downloadContentFromMessage(msg.message[`${type}Message`], type);
+                            let buffer = Buffer.from([]);
+                            for await (const chunk of stream) buffer = Buffer.concat([buffer, chunk]);
+                            media = buffer;
                             mediaType = type;
                             break;
                         } catch (error) {
@@ -148,7 +153,7 @@ const AntiDelete = async (m, Matrix) => {
                 }
 
                 if (content || media) {
-                    antiDelete.messageCache.set(msg.key.id, {
+                    antiDelete.addMessage(msg.key.id, {
                         content,
                         media,
                         type: mediaType,
@@ -156,7 +161,6 @@ const AntiDelete = async (m, Matrix) => {
                         timestamp: Date.now(),
                         chatJid: msg.key.remoteJid
                     });
-                    antiDelete.saveDatabase();
                 }
             } catch (error) {
                 console.error('⚠️ Message caching error:', error.message);
@@ -164,23 +168,35 @@ const AntiDelete = async (m, Matrix) => {
         }
     });
 
-    /* Deletion Handler */
+    /* Deletion Handler with Event Deduplication */
     Matrix.ev.on('messages.update', async updates => {
         if (!antiDelete.enabled || !updates?.length) return;
 
         for (const update of updates) {
-            try {
-                const { key, update: updateData } = update;
-                
-                // Skip if not a deletion or already processed
-                if (updateData?.messageStubType !== proto.WebMessageInfo.StubType.REVOKE || 
-                    !antiDelete.messageCache.has(key.id) ||
-                    antiDelete.recoveredMessages.has(key.id)) {
-                    continue;
-                }
+            const { key, update: updateData } = update;
+            
+            // Skip if not a deletion event
+            if (updateData?.messageStubType !== proto.WebMessageInfo.StubType.REVOKE) continue;
+            
+            // Skip if we don't have this message cached
+            if (!antiDelete.messageCache.has(key.id)) continue;
+            
+            // Skip if already being processed or recently processed
+            if (activeProcessing.has(key.id) continue;
+            if (antiDelete.lastProcessed.has(key.id) {
+                const lastProcessTime = antiDelete.lastProcessed.get(key.id);
+                if (Date.now() - lastProcessTime < 1000) continue; // Skip if processed in last second
+            }
 
+            // Mark as being processed
+            activeProcessing.add(key.id);
+            
+            try {
                 const msg = antiDelete.messageCache.get(key.id);
                 const destination = config.ANTI_DELETE_PATH === "same" ? key.remoteJid : Matrix.user.id;
+
+                // Mark as processed immediately
+                antiDelete.markAsProcessed(key.id);
 
                 // Prepare alert
                 const alertMsg = [
@@ -209,13 +225,17 @@ const AntiDelete = async (m, Matrix) => {
                     });
                 }
 
-                // Update state
-                antiDelete.recoveredMessages.add(key.id);
+                // Remove from cache after sending
                 antiDelete.messageCache.delete(key.id);
                 antiDelete.saveDatabase();
 
             } catch (error) {
                 console.error('⚠️ Deletion handling error:', error.message);
+                // If failed, remove from processed to allow retry
+                antiDelete.lastProcessed.delete(key.id);
+            } finally {
+                // Always remove from active processing
+                activeProcessing.delete(key.id);
             }
         }
     });
