@@ -4,7 +4,6 @@ import config from '../config.cjs';
 import fs from 'fs';
 import path from 'path';
 
-// Database file path
 const DB_FILE = path.join(process.cwd(), 'database.json');
 
 class AntiDeleteSystem {
@@ -61,22 +60,32 @@ class AntiDeleteSystem {
             }
         }
         
-        if (changed) {
-            this.saveDatabase();
-        }
+        if (changed) this.saveDatabase();
     }
 
     formatTime(timestamp) {
-        const options = {
-            year: 'numeric',
-            month: 'short',
-            day: 'numeric',
-            hour: '2-digit',
-            minute: '2-digit',
-            second: '2-digit',
-            hour12: true
-        };
-        return new Date(timestamp).toLocaleString('en-US', options);
+        try {
+            const date = new Date(timestamp);
+            const options = {
+                year: 'numeric',
+                month: 'short',
+                day: 'numeric',
+                hour: '2-digit',
+                minute: '2-digit',
+                second: '2-digit',
+                hour12: true,
+                timeZoneName: 'short'
+            };
+            
+            return date.toLocaleString('en-US', options)
+                .replace(/(\d+)(:\d+)(:\d+)\s(AM|PM)/, (match, h, m, s, period) => {
+                    return `${h}${m} ${period}`;
+                })
+                .replace(/,/g, '');
+        } catch (e) {
+            console.error('Time formatting error:', e);
+            return 'Unknown Time';
+        }
     }
 
     destroy() {
@@ -193,8 +202,8 @@ const AntiDelete = async (m, Matrix) => {
                             buffer = Buffer.concat([buffer, chunk]);
                         }
                         media = buffer;
-                        type = 'voice';
-                        mimetype = msg.message.audioMessage.mimetype;
+                        type = 'audio';
+                        mimetype = msg.message.audioMessage.mimetype || 'audio/ogg; codecs=opus';
                     } catch (e) {
                         console.error('Error downloading voice message:', e);
                     }
@@ -259,8 +268,9 @@ const AntiDelete = async (m, Matrix) => {
                         caption: baseInfo
                     };
 
-                    if (cachedMsg.type === 'voice') {
+                    if (cachedMsg.type === 'audio' && cachedMsg.mimetype?.includes('ogg')) {
                         messageOptions.ptt = true;
+                        messageOptions.mimetype = 'audio/ogg; codecs=opus';
                     }
 
                     await Matrix.sendMessage(destination, messageOptions);
