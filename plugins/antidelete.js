@@ -65,23 +65,17 @@ class AntiDeleteSystem {
 
     formatTime(timestamp) {
         try {
-            const date = new Date(timestamp);
             const options = {
+                timeZone: 'Asia/Karachi',
                 year: 'numeric',
                 month: 'short',
                 day: 'numeric',
                 hour: '2-digit',
                 minute: '2-digit',
                 second: '2-digit',
-                hour12: true,
-                timeZoneName: 'short'
+                hour12: true
             };
-            
-            return date.toLocaleString('en-US', options)
-                .replace(/(\d+)(:\d+)(:\d+)\s(AM|PM)/, (match, h, m, s, period) => {
-                    return `${h}${m} ${period}`;
-                })
-                .replace(/,/g, '');
+            return new Date(timestamp).toLocaleString('en-PK', options) + ' PKT';
         } catch (e) {
             console.error('Time formatting error:', e);
             return 'Unknown Time';
@@ -259,25 +253,30 @@ const AntiDelete = async (m, Matrix) => {
                     cachedMsg.type.charAt(0).toUpperCase() + cachedMsg.type.slice(1) : 
                     'Text';
                 
+                // Send alert message first
                 const baseInfo = `╭━━〔 *DELETED ${messageType}* 〕━━┈⊷\n┃◈╭─────────────·๏\n┃◈┃• *Sender:* ${cachedMsg.senderFormatted}\n┃◈┃• *Deleted By:* ${deletedBy}\n┃◈┃• *Chat:* ${chatInfo.name}${chatInfo.isGroup ? ' (Group)' : ''}\n┃◈┃• *Sent At:* ${antiDelete.formatTime(cachedMsg.timestamp)}\n┃◈┃• *Deleted At:* ${antiDelete.formatTime(Date.now())}\n┃◈╰─────────────·๏\n╰━━━━━━━━━━━━━━━━┈⊷`;
 
+                await Matrix.sendMessage(destination, { text: baseInfo });
+
+                // Send media separately
                 if (cachedMsg.media) {
                     const messageOptions = {
                         [cachedMsg.type]: cachedMsg.media,
-                        mimetype: cachedMsg.mimetype,
-                        caption: baseInfo
+                        mimetype: cachedMsg.mimetype
                     };
 
-                    if (cachedMsg.type === 'audio' && cachedMsg.mimetype?.includes('ogg')) {
+                    if (cachedMsg.type === 'audio') {
                         messageOptions.ptt = true;
                         messageOptions.mimetype = 'audio/ogg; codecs=opus';
                     }
 
                     await Matrix.sendMessage(destination, messageOptions);
-                } 
-                else if (cachedMsg.content) {
+                }
+                
+                // Send text content if available
+                if (cachedMsg.content) {
                     await Matrix.sendMessage(destination, {
-                        text: `${baseInfo}\n\n💬 *Content:* \n${cachedMsg.content}`
+                        text: `💬 *Content:* \n${cachedMsg.content}`
                     });
                 }
             } catch (error) {
