@@ -23,7 +23,7 @@ class AntiDeleteSystem {
                 const data = fs.readFileSync(DB_FILE, 'utf8');
                 const parsed = JSON.parse(data);
                 this.messageCache = new Map(parsed);
-                console.log(`♻️ Loaded ${this.messageCache.size} messages from database`);
+                console.log(`♻️ Loaded ${this.messageCache.size} cached messages`);
             }
         } catch (error) {
             console.error('🚨 Database load error:', error);
@@ -70,9 +70,12 @@ class AntiDeleteSystem {
 const antiDelete = new AntiDeleteSystem();
 
 const AntiDelete = async (m, Matrix) => {
-    const isOwner = m.sender === Matrix.user.id;
+    // Updated Authorization
+    const botNumber = await Matrix.decodeJid(Matrix.user.id);
+    const isCreator = [botNumber, config.OWNER_NUMBER + '@s.whatsapp.net'].includes(m.sender);
     const prefix = config.PREFIX;
-    const [cmd, subCmd] = m.body?.slice(prefix.length).trim().split(/ +/).map(s => s.toLowerCase()) || [];
+    const cmd = m.body.startsWith(prefix) ? m.body.slice(prefix.length).split(' ')[0].toLowerCase() : '';
+    const text = m.body.slice(prefix.length + cmd.length).trim();
 
     // Formatting Functions
     const formatJid = (jid) => jid?.replace(/@.+/, '') || 'Unknown';
@@ -85,58 +88,46 @@ const AntiDelete = async (m, Matrix) => {
 
     // Command Handler
     if (cmd === 'antidelete') {
-        if (!isOwner) {
-            await m.reply('🚫 *You are not authorized to use this command!*');
-            return;
-        }
-
+        if (!isCreator) return m.reply("*📛 THIS IS AN OWNER COMMAND*");
+        
         const mode = config.ANTI_DELETE_PATH === "same" ? 
-            "🔄 *Same Chat Mode*" : 
-            "📨 *Inbox Mode*";
+            "🔄 Same Chat" : "📨 Bot Inbox";
 
-        const responses = {
-            on: `━━〔 *ANTI-DELETE* 〕━━┈⊷\n┃◈╭─────────────·๏\n┃◈┃• *Status:* 🟢 ENABLED\n┃◈┃• *Mode:* ${mode}\n┃◈┃• *Cache:* 5 minutes\n┃◈╰─────────────·๏\n┃◈• Deleted messages will be recovered!`,
-            off: `━━〔 *ANTI-DELETE* 〕━━┈⊷\n┃◈╭─────────────·๏\n┃◈┃• *Status:* 🔴 DISABLED\n┃◈┃• *Cache:* Cleared\n┃◈╰─────────────·๏\n┃◈• System is now inactive`,
-            status: `━━〔 *ANTI-DELETE STATUS* 〕━━┈⊷\n┃◈╭─────────────·๏\n┃◈┃• *State:* ${antiDelete.enabled ? '🟢 ACTIVE' : '🔴 INACTIVE'}\n┃◈┃• *Mode:* ${mode}\n┃◈┃• *Messages in cache:* ${antiDelete.messageCache.size}\n┃◈╰─────────────·๏`
-        };
-
-        try {
-            if (subCmd === 'on') {
-                antiDelete.enabled = true;
-                await m.reply(responses.on);
-            } 
-            else if (subCmd === 'off') {
-                antiDelete.enabled = false;
-                antiDelete.messageCache.clear();
-                await m.reply(responses.off);
-            }
-            else {
-                await m.reply(responses.status);
-            }
-            await m.React(antiDelete.enabled ? '✅' : '❌');
-        } catch (error) {
-            console.error('⚠️ Command error:', error);
-            await m.React('❌');
+        if (text === 'on') {
+            antiDelete.enabled = true;
+            await m.reply(`━━〔 *ANTI-DELETE* 〕━━┈⊷\n┃◈╭─────────────·๏\n┃◈┃• *Status:* 🟢 ENABLED\n┃◈┃• *Mode:* ${mode}\n┃◈╰─────────────·๏`);
+        } 
+        else if (text === 'off') {
+            antiDelete.enabled = false;
+            antiDelete.messageCache.clear();
+            await m.reply(`━━〔 *ANTI-DELETE* 〕━━┈⊷\n┃◈╭─────────────·๏\n┃◈┃• *Status:* 🔴 DISABLED\n┃◈╰─────────────·๏`);
         }
+        else {
+            await m.reply(`━━〔 *ANTI-DELETE* 〕━━┈⊷\n┃◈╭─────────────·๏\n┃◈┃• *Usage:*\n┃◈┃• ${prefix}antidelete on\n┃◈┃• ${prefix}antidelete off\n┃◈┃• *Current Mode:* ${mode}\n┃◈╰─────────────·๏`);
+        }
+        await m.React(antiDelete.enabled ? '✅' : '❌');
         return;
     }
 
-    /* Message Processing */
+    /* Message Caching */
     Matrix.ev.on('messages.upsert', async ({ messages }) => {
         if (!antiDelete.enabled) return;
 
-        for (const msg of messages) {
-            if (msg.key.fromMe || !msg.message) continue;
-
+        for (const msg of messages.filter(m => !m.key.fromMe && m.message)) {
             try {
-                const content = msg.message.conversation || 
-                    msg.message.extendedTextMessage?.text ||
-                    Object.values(msg.message).find(m => m?.caption)?.caption;
+                const content = [
+                    msg.message.conversation,
+                    msg.message.extendedTextMessage?.text,
+                    msg.message.imageMessage?.caption,
+                    msg.message.videoMessage?.caption,
+                    msg.message.documentMessage?.caption
+                ].find(Boolean);
 
                 let media, mediaType;
-                for (const type of ['image', 'video', 'audio', 'document']) {
+                for (const type of ['image', 'video', 'audio', 'document', 'sticker']) {
                     if (msg.message[`${type}Message`]) {
-                        const stream = await downloadContentFromMessage(msg.message[`${type}Message`], type);
+                        const mediaMsg = msg.message[`${type}Message`];
+                        const stream = await downloadContentFromMessage(mediaMsg, type);
                         let buffer = Buffer.from([]);
                         for await (const chunk of stream) buffer = Buffer.concat([buffer, chunk]);
                         media = buffer;
@@ -165,21 +156,23 @@ const AntiDelete = async (m, Matrix) => {
     Matrix.ev.on('messages.update', async updates => {
         if (!antiDelete.enabled) return;
 
-        for (const update of updates) {
+        for (const { key, update } of updates.filter(u => 
+            u.update?.messageStubType === proto.WebMessageInfo.StubType.REVOKE &&
+            !u.key.fromMe &&
+            antiDelete.messageCache.has(u.key.id)
+        )) {
             try {
-                const { key, update: updateData } = update;
-                if (!updateData?.messageStubType === proto.WebMessageInfo.StubType.REVOKE || 
-                    !antiDelete.messageCache.has(key.id)) continue;
-
                 const msg = antiDelete.messageCache.get(key.id);
-                const destination = config.ANTI_DELETE_PATH === "same" ? key.remoteJid : Matrix.user.id;
+                const destination = config.ANTI_DELETE_PATH === "same" 
+                    ? key.remoteJid 
+                    : Matrix.user.id;
 
                 const alertMsg = [
-                    `━━〔 *ANTI-DELETE ALERT* 〕━━┈⊷`,
+                    `━━〔 *ANTI-DELETE ALERT ⚠️* 〕━━┈⊷`,
                     `┃◈╭─────────────·๏`,
                     `┃◈┃• *Type:* ${msg.type ? msg.type.toUpperCase() : 'TEXT'}`,
                     `┃◈┃• *Sender:* @${formatJid(msg.sender)}`,
-                    `┃◈┃• *Deleted by:* @${formatJid(updateData.participant || key.participant)}`,
+                    `┃◈┃• *Deleted By:* @${formatJid(update.participant || key.participant)}`,
                     `┃◈┃• *Time:* ${formatTime(msg.timestamp)}`,
                     `┃◈╰─────────────·๏`
                 ].join('\n');
@@ -187,13 +180,16 @@ const AntiDelete = async (m, Matrix) => {
                 if (msg.media) {
                     await Matrix.sendMessage(destination, {
                         [msg.type]: msg.media,
-                        caption: alertMsg,
-                        mentions: [msg.sender, updateData.participant || key.participant].filter(Boolean)
+                        caption: msg.type !== 'sticker' ? alertMsg : undefined,
+                        mentions: [msg.sender, update.participant || key.participant].filter(Boolean)
                     });
+                    if (msg.type === 'sticker') {
+                        await Matrix.sendMessage(destination, { text: alertMsg });
+                    }
                 } else {
                     await Matrix.sendMessage(destination, {
                         text: `${alertMsg}\n┃◈• *Content:*\n${msg.content}`,
-                        mentions: [msg.sender, updateData.participant || key.participant].filter(Boolean)
+                        mentions: [msg.sender, update.participant || key.participant].filter(Boolean)
                     });
                 }
 
